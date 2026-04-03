@@ -5,6 +5,7 @@ import type { ShoppingItem } from "@/lib/supabase";
 import { DEFAULT_STORES, CATEGORIES, STORE_COLORS, CATEGORY_COLORS } from "@/lib/supabase";
 
 type Tab = "list" | "store" | "history";
+type ViewMode = "store" | "category";
 
 const BASE_STORES = [...DEFAULT_STORES] as string[];
 
@@ -34,8 +35,15 @@ export default function Home() {
   const [isSortMode, setIsSortMode]     = useState(false);
   const [showAddStore, setShowAddStore] = useState(false);
   const [newStoreName, setNewStoreName] = useState("");
-  const [dragStore, setDragStore]       = useState<string | null>(null);
-  const [dragOverStore, setDragOverStore] = useState<string | null>(null);
+
+  // ── 修正②: 編集モーダル ──
+  const [editItem, setEditItem]           = useState<ShoppingItem | null>(null);
+  const [editForm, setEditForm]           = useState({ name: "", category: "", store: "", quantity: "", memo: "" });
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  // ── 修正④: カテゴリ別表示 ──
+  const [viewMode, setViewMode]               = useState<ViewMode>("store");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   // ── localStorage 初期化 ──
   useEffect(() => {
@@ -82,28 +90,17 @@ export default function Home() {
     setShowAddStore(false);
   };
 
-  // ── D&D ──
-  const handleDragStart = (store: string) => { if (isSortMode) setDragStore(store); };
-  const handleDragOver  = (e: React.DragEvent, store: string) => {
-    if (!isSortMode) return;
-    e.preventDefault();
-    setDragOverStore(store);
-  };
-  const handleDrop = (e: React.DragEvent, store: string) => {
-    e.preventDefault();
-    if (!isSortMode || !dragStore || dragStore === store) {
-      setDragStore(null); setDragOverStore(null); return;
-    }
-    const next = [...allStores];
-    const from = next.indexOf(dragStore);
-    const to   = next.indexOf(store);
-    next.splice(from, 1);
-    next.splice(to, 0, dragStore);
+  // ── 修正①: ↑↓ 並べ替え ──
+  const moveStore = (store: string, direction: "up" | "down") => {
+    const idx = allStores.indexOf(store);
+    if (direction === "up"   && idx === 0)                    return;
+    if (direction === "down" && idx === allStores.length - 1) return;
+    const next     = [...allStores];
+    const swapIdx  = direction === "up" ? idx - 1 : idx + 1;
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
     setStoreOrder(next);
     localStorage.setItem("storeOrder", JSON.stringify(next));
-    setDragStore(null); setDragOverStore(null);
   };
-  const handleDragEnd = () => { setDragStore(null); setDragOverStore(null); };
 
   // ── アイテム取得 ──
   const fetchItems = useCallback(async (filter: "all" | "pending" | "purchased" = "all") => {
@@ -175,6 +172,39 @@ export default function Home() {
     }
   };
 
+  // ── 修正②: 編集 ──
+  const handleEditOpen = (item: ShoppingItem) => {
+    setEditItem(item);
+    setEditForm({
+      name:     item.name,
+      category: item.category ?? "",
+      store:    item.store    ?? "",
+      quantity: item.quantity ?? "",
+      memo:     item.memo     ?? "",
+    });
+  };
+
+  const handleEditSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editItem || !editForm.name.trim()) return;
+    setEditSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/items/${editItem.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editForm),
+      });
+      if (!res.ok) throw new Error("更新失敗");
+      setEditItem(null);
+      fetchItems(tab === "history" ? "purchased" : "pending");
+    } catch {
+      setError("更新に失敗しました");
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
   // ── 派生 ──
   const pendingItems   = items.filter((i) => !i.is_purchased);
   const purchasedItems = items.filter((i) => i.is_purchased);
@@ -182,29 +212,44 @@ export default function Home() {
   for (const s of allStores) itemsByStore[s] = pendingItems.filter((i) => i.store === s);
   const noStoreItems = pendingItems.filter((i) => !i.store || !allStoreSet.has(i.store));
 
+  // ── 修正④: カテゴリ別派生 ──
+  const allCategories = [...CATEGORIES, "未分類"] as string[];
+  const itemsByCategory: Record<string, ShoppingItem[]> = {};
+  for (const c of CATEGORIES) {
+    itemsByCategory[c] = pendingItems.filter((i) => i.category === c);
+  }
+  itemsByCategory["未分類"] = pendingItems.filter(
+    (i) => !i.category || !(CATEGORIES as readonly string[]).includes(i.category)
+  );
+
   // ── style helpers ──
-  const sPage   = dk ? { background: DK_PAGE,  color: DK_TEXT }    : {};
+  const sPage  = dk ? { background: DK_PAGE,  color: DK_TEXT }        : {};
   const sHeader = dk ? { background: DK_CARD,  borderColor: DK_BORDER } : {};
-  const sCard   = dk ? { background: DK_CARD,  borderColor: DK_BORDER } : {};
-  const sInput  = dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {};
-  const sModal  = dk ? { background: DK_CARD }  : {};
-  const sText   = dk ? { color: DK_TEXT }  : {};
-  const sSub    = dk ? { color: DK_SUBTEXT } : {};
+  const sCard  = dk ? { background: DK_CARD,  borderColor: DK_BORDER } : {};
+  const sInput = dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {};
+  const sModal = dk ? { background: DK_CARD }  : {};
+  const sText  = dk ? { color: DK_TEXT }   : {};
+  const sSub   = dk ? { color: DK_SUBTEXT } : {};
 
   const chipStyle = (store: string) => {
     const isSelected = selectedStore === store;
     const hasItems   = (itemsByStore[store]?.length ?? 0) > 0;
-    const isDragging = isSortMode && dragStore === store;
-    const isDragOver = isSortMode && dragOverStore === store;
     return [
       "flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all select-none",
-      isSelected  ? "bg-emerald-500 text-white border-emerald-500" : "",
-      !isSelected && hasItems  && !dk ? "bg-white text-gray-700 border-gray-300" : "",
-      !isSelected && !hasItems && !dk ? "bg-gray-50 text-gray-300 border-gray-100" : "",
-      !isSelected && dk ? "border-[#2a2a4a]" : "",
-      isSortMode  ? "cursor-grab active:cursor-grabbing" : "",
-      isDragging  ? "opacity-40" : "",
-      isDragOver  ? "ring-2 ring-emerald-400 scale-105" : "",
+      isSelected                              ? "bg-emerald-500 text-white border-emerald-500" : "",
+      !isSelected && hasItems  && !dk         ? "bg-white text-gray-700 border-gray-300" : "",
+      !isSelected && !hasItems && !dk         ? "bg-gray-50 text-gray-300 border-gray-100" : "",
+      !isSelected && dk                       ? "border-[#2a2a4a]" : "",
+    ].filter(Boolean).join(" ");
+  };
+
+  const catChipStyle = (cat: string | null) => {
+    const isSelected = selectedCategory === cat;
+    return [
+      "flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all",
+      isSelected           ? "bg-blue-600 text-white border-blue-600" : "",
+      !isSelected && !dk   ? "bg-gray-50 text-gray-600 border-gray-200" : "",
+      !isSelected && dk    ? "border-[#2a2a4a]" : "",
     ].filter(Boolean).join(" ");
   };
 
@@ -316,25 +361,31 @@ export default function Home() {
 
               <div>
                 <label className="text-sm font-medium block mb-1" style={sText}>店舗</label>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {allStores.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setForm({ ...form, store: form.store === s ? "" : s })}
-                      className={`text-xs py-1.5 px-1 rounded-lg border transition-all ${
-                        form.store === s ? "border-emerald-500 bg-emerald-50 font-medium" : ""
-                      }`}
-                      style={{
-                        ...(dk
-                          ? { borderColor: form.store === s ? undefined : DK_BORDER, background: form.store === s ? undefined : DK_INPUT, color: DK_TEXT }
-                          : { color: "#111827" }),
-                      }}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
+                {allStores.length === 0 ? (
+                  <p className="text-xs py-2" style={{ color: dk ? DK_SUBTEXT : "#9ca3af" }}>
+                    店舗がまだ登録されていません。「店舗別」タブから追加できます。
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {allStores.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setForm({ ...form, store: form.store === s ? "" : s })}
+                        className={`text-xs py-1.5 px-1 rounded-lg border transition-all ${
+                          form.store === s ? "border-emerald-500 bg-emerald-50 font-medium" : ""
+                        }`}
+                        style={{
+                          ...(dk
+                            ? { borderColor: form.store === s ? undefined : DK_BORDER, background: form.store === s ? undefined : DK_INPUT, color: DK_TEXT }
+                            : { color: "#111827" }),
+                        }}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {showAddStore ? (
                   <div className="flex gap-2 mt-2">
@@ -393,6 +444,107 @@ export default function Home() {
         </div>
       )}
 
+      {/* ── 修正②: 編集モーダル ── */}
+      {editItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div
+            className="bg-white rounded-xl p-6 w-full max-w-sm mx-4 shadow-xl"
+            style={sModal}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold" style={sText}>✏️ 商品を編集</h2>
+              <button onClick={() => setEditItem(null)} className="text-2xl leading-none" style={sText}>×</button>
+            </div>
+
+            <form onSubmit={handleEditSave} className="space-y-3">
+              <div>
+                <label className="text-sm font-medium block mb-1" style={sText}>
+                  商品名 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full border rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-900"
+                  style={sInput}
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium block mb-1" style={sText}>カテゴリ</label>
+                  <select
+                    value={editForm.category}
+                    onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                    className="w-full border rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-900"
+                    style={sInput}
+                  >
+                    <option value="">未設定</option>
+                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1" style={sText}>数量</label>
+                  <input
+                    type="text"
+                    value={editForm.quantity}
+                    onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })}
+                    placeholder="例：2個"
+                    className="w-full border rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-emerald-400 placeholder:text-gray-400 text-gray-900"
+                    style={sInput}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium block mb-1" style={sText}>店舗</label>
+                <select
+                  value={editForm.store}
+                  onChange={(e) => setEditForm({ ...editForm, store: e.target.value })}
+                  className="w-full border rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-900"
+                  style={sInput}
+                >
+                  <option value="">未設定</option>
+                  {allStores.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium block mb-1" style={sText}>メモ</label>
+                <input
+                  type="text"
+                  value={editForm.memo}
+                  onChange={(e) => setEditForm({ ...editForm, memo: e.target.value })}
+                  placeholder="備考など"
+                  className="w-full border rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-emerald-400 placeholder:text-gray-400 text-gray-900"
+                  style={sInput}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setEditItem(null)}
+                  className="flex-1 border rounded-xl py-3 font-medium text-base transition-all"
+                  style={dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { color: "#6b7280", borderColor: "#d1d5db" }}
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSubmitting || !editForm.name.trim()}
+                  className="flex-1 bg-emerald-500 text-white rounded-xl py-3 font-bold text-base disabled:opacity-50 active:scale-95 transition-transform"
+                >
+                  {editSubmitting ? "保存中..." : "保存"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── Main Content ── */}
       <main className="max-w-lg mx-auto px-4 py-4 pb-24">
         {error && (
@@ -421,7 +573,7 @@ export default function Home() {
                   ? <EmptyState message="未購入の商品はありません 🎉" dark={dk} />
                   : <div className="space-y-2">
                       {pendingItems.map((item) => (
-                        <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} dark={dk} sCard={sCard} />
+                        <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} onEdit={handleEditOpen} dark={dk} sCard={sCard} />
                       ))}
                     </div>
                 }
@@ -431,119 +583,240 @@ export default function Home() {
             {/* ── STORE TAB ── */}
             {tab === "store" && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="flex-1 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
-                    <button
-                      onClick={() => !isSortMode && setSelectedStore(null)}
-                      className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
-                        selectedStore === null ? "bg-emerald-500 text-white border-emerald-500" : ""
-                      }`}
-                      style={selectedStore !== null ? (dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}) : {}}
-                    >
-                      すべて
-                    </button>
-
-                    {allStores.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => !isSortMode && setSelectedStore(selectedStore === s ? null : s)}
-                        draggable={isSortMode}
-                        onDragStart={() => handleDragStart(s)}
-                        onDragOver={(e) => handleDragOver(e, s)}
-                        onDrop={(e) => handleDrop(e, s)}
-                        onDragEnd={handleDragEnd}
-                        className={chipStyle(s)}
-                        style={
-                          selectedStore !== s
-                            ? dk
-                              ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT }
-                              : {}
-                            : {}
-                        }
-                      >
-                        {isSortMode && <span className="mr-1 opacity-60">⠿</span>}
-                        {s}
-                        {!isSortMode && (itemsByStore[s]?.length ?? 0) > 0 && (
-                          <span className="ml-1 bg-emerald-100 text-emerald-600 rounded-full px-1.5 text-xs">
-                            {itemsByStore[s].length}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-
-                    {showAddStore ? (
-                      <div className="flex gap-1 flex-shrink-0 items-center">
-                        <input
-                          type="text"
-                          value={newStoreName}
-                          onChange={(e) => setNewStoreName(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
-                          placeholder="店舗名"
-                          className="border rounded-full px-3 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-900"
-                          style={sInput}
-                          autoFocus
-                        />
-                        <button onClick={handleAddStore} className="bg-emerald-500 text-white rounded-full px-2 py-1 text-xs font-medium">追加</button>
-                        <button onClick={() => { setShowAddStore(false); setNewStoreName(""); }}
-                          className="rounded-full px-2 py-1 text-xs border"
-                          style={dk ? { borderColor: DK_BORDER, color: DK_TEXT } : { color: "#6b7280" }}>×</button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setShowAddStore(true)}
-                        className="flex-shrink-0 px-3 py-1.5 rounded-full text-sm border border-dashed border-emerald-400 text-emerald-500 transition-all"
-                      >
-                        ＋ 店舗追加
-                      </button>
-                    )}
-                  </div>
-
+                {/* 修正④: 店舗別 / カテゴリ別 切り替え */}
+                <div className="flex gap-2 mb-3">
                   <button
-                    onClick={() => { setIsSortMode(!isSortMode); setDragStore(null); setDragOverStore(null); }}
-                    className={`flex-shrink-0 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-all ${
-                      isSortMode ? "bg-emerald-500 text-white border-emerald-500" : ""
+                    onClick={() => setViewMode("store")}
+                    className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
+                      viewMode === "store" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"
                     }`}
-                    style={!isSortMode ? (dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { borderColor: "#d1d5db", color: "#6b7280" }) : {}}
+                    style={viewMode !== "store" && dk ? { background: DK_INPUT, color: DK_TEXT } : {}}
                   >
-                    {isSortMode ? "✓ 完了" : "⠿ 並替"}
+                    🏪 店舗別
+                  </button>
+                  <button
+                    onClick={() => setViewMode("category")}
+                    className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
+                      viewMode === "category" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"
+                    }`}
+                    style={viewMode !== "category" && dk ? { background: DK_INPUT, color: DK_TEXT } : {}}
+                  >
+                    📦 カテゴリ別
                   </button>
                 </div>
 
-                {isSortMode && (
-                  <p className="text-xs text-emerald-500 mb-3">店舗チップをドラッグして並び替えてください</p>
-                )}
+                {/* ── 店舗別ビュー ── */}
+                {viewMode === "store" && (
+                  <>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="flex-1 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
+                        {/* すべてチップ */}
+                        <button
+                          onClick={() => !isSortMode && setSelectedStore(null)}
+                          className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                            selectedStore === null ? "bg-emerald-500 text-white border-emerald-500" : ""
+                          }`}
+                          style={selectedStore !== null ? (dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}) : {}}
+                        >
+                          すべて
+                        </button>
 
-                {(selectedStore ? [selectedStore] : allStores).map((store) => {
-                  const storeItems = itemsByStore[store] ?? [];
-                  if (!storeItems.length) return null;
-                  return (
-                    <div key={store} className="mb-6">
-                      <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-2 ${STORE_COLORS[store] ?? "bg-gray-100 text-gray-600"}`}>
-                        🏪 {store} <span className="text-xs opacity-70">({storeItems.length})</span>
-                      </div>
-                      <div className="space-y-2">
-                        {storeItems.map((item) => (
-                          <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} dark={dk} sCard={sCard} />
+                        {/* 修正①: 店舗チップ + ↑↓ボタン */}
+                        {allStores.map((s, idx) => (
+                          <div key={s} className="flex-shrink-0 flex items-center gap-0.5">
+                            <button
+                              onClick={() => !isSortMode && setSelectedStore(selectedStore === s ? null : s)}
+                              className={chipStyle(s)}
+                              style={
+                                selectedStore !== s
+                                  ? dk
+                                    ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT }
+                                    : {}
+                                  : {}
+                              }
+                            >
+                              {s}
+                              {!isSortMode && (itemsByStore[s]?.length ?? 0) > 0 && (
+                                <span className="ml-1 bg-emerald-100 text-emerald-600 rounded-full px-1.5 text-xs">
+                                  {itemsByStore[s].length}
+                                </span>
+                              )}
+                            </button>
+
+                            {isSortMode && (
+                              <div className="flex flex-col gap-0.5 ml-0.5">
+                                <button
+                                  onClick={() => moveStore(s, "up")}
+                                  disabled={idx === 0}
+                                  className={`text-xs px-1 py-0.5 rounded transition-all ${
+                                    idx === 0
+                                      ? "bg-gray-100 text-gray-300 cursor-not-allowed"
+                                      : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+                                  }`}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  onClick={() => moveStore(s, "down")}
+                                  disabled={idx === allStores.length - 1}
+                                  className={`text-xs px-1 py-0.5 rounded transition-all ${
+                                    idx === allStores.length - 1
+                                      ? "bg-gray-100 text-gray-300 cursor-not-allowed"
+                                      : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+                                  }`}
+                                >
+                                  ↓
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         ))}
-                      </div>
-                    </div>
-                  );
-                })}
 
-                {selectedStore === null && noStoreItems.length > 0 && (
-                  <div className="mb-6">
-                    <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-2 bg-gray-100 text-gray-600">
-                      📦 店舗未設定 <span className="text-xs opacity-70">({noStoreItems.length})</span>
+                        {/* 店舗追加 */}
+                        {!isSortMode && (
+                          showAddStore ? (
+                            <div className="flex gap-1 flex-shrink-0 items-center">
+                              <input
+                                type="text"
+                                value={newStoreName}
+                                onChange={(e) => setNewStoreName(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
+                                placeholder="店舗名"
+                                className="border rounded-full px-3 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-900"
+                                style={sInput}
+                                autoFocus
+                              />
+                              <button onClick={handleAddStore} className="bg-emerald-500 text-white rounded-full px-2 py-1 text-xs font-medium">追加</button>
+                              <button onClick={() => { setShowAddStore(false); setNewStoreName(""); }}
+                                className="rounded-full px-2 py-1 text-xs border"
+                                style={dk ? { borderColor: DK_BORDER, color: DK_TEXT } : { color: "#6b7280" }}>×</button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setShowAddStore(true)}
+                              className="flex-shrink-0 px-3 py-1.5 rounded-full text-sm border border-dashed border-emerald-400 text-emerald-500 transition-all"
+                            >
+                              ＋ 店舗追加
+                            </button>
+                          )
+                        )}
+                      </div>
+
+                      {/* 並替ボタン */}
+                      <button
+                        onClick={() => setIsSortMode(!isSortMode)}
+                        className={`flex-shrink-0 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-all ${
+                          isSortMode ? "bg-emerald-500 text-white border-emerald-500" : ""
+                        }`}
+                        style={!isSortMode ? (dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { borderColor: "#d1d5db", color: "#6b7280" }) : {}}
+                      >
+                        {isSortMode ? "✓ 完了" : "⠿ 並替"}
+                      </button>
                     </div>
-                    <div className="space-y-2">
-                      {noStoreItems.map((item) => (
-                        <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} dark={dk} sCard={sCard} />
-                      ))}
-                    </div>
-                  </div>
+
+                    {isSortMode && (
+                      <p className="text-xs text-emerald-500 mb-3">↑↓ボタンで店舗の順番を変えてください</p>
+                    )}
+
+                    {/* 店舗が空のとき */}
+                    {allStores.length === 0 && !showAddStore && (
+                      <div className="text-center py-8" style={{ color: dk ? DK_SUBTEXT : "#9ca3af" }}>
+                        <p className="text-sm mb-3">店舗がまだ登録されていません。<br />下のボタンから追加してください。</p>
+                        <button
+                          onClick={() => setShowAddStore(true)}
+                          className="text-sm text-emerald-600 underline"
+                        >
+                          ＋ 店舗を追加する
+                        </button>
+                      </div>
+                    )}
+
+                    {(selectedStore ? [selectedStore] : allStores).map((store) => {
+                      const storeItems = itemsByStore[store] ?? [];
+                      if (!storeItems.length) return null;
+                      return (
+                        <div key={store} className="mb-6">
+                          <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-2 ${STORE_COLORS[store] ?? "bg-gray-100 text-gray-600"}`}>
+                            🏪 {store} <span className="text-xs opacity-70">({storeItems.length})</span>
+                          </div>
+                          <div className="space-y-2">
+                            {storeItems.map((item) => (
+                              <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} onEdit={handleEditOpen} dark={dk} sCard={sCard} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {selectedStore === null && noStoreItems.length > 0 && (
+                      <div className="mb-6">
+                        <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-2 bg-gray-100 text-gray-600">
+                          📦 店舗未設定 <span className="text-xs opacity-70">({noStoreItems.length})</span>
+                        </div>
+                        <div className="space-y-2">
+                          {noStoreItems.map((item) => (
+                            <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} onEdit={handleEditOpen} dark={dk} sCard={sCard} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {pendingItems.length === 0 && <EmptyState message="未購入の商品はありません 🎉" dark={dk} />}
+                  </>
                 )}
 
-                {pendingItems.length === 0 && <EmptyState message="未購入の商品はありません 🎉" dark={dk} />}
+                {/* ── カテゴリ別ビュー ── */}
+                {viewMode === "category" && (
+                  <>
+                    {/* カテゴリチップ */}
+                    <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 mb-3">
+                      <button
+                        onClick={() => setSelectedCategory(null)}
+                        className={catChipStyle(null)}
+                        style={selectedCategory !== null && dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}}
+                      >
+                        すべて
+                      </button>
+                      {allCategories.map((c) => {
+                        const count = itemsByCategory[c]?.length ?? 0;
+                        return (
+                          <button
+                            key={c}
+                            onClick={() => setSelectedCategory(selectedCategory === c ? null : c)}
+                            className={catChipStyle(c)}
+                            style={selectedCategory !== c && dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}}
+                          >
+                            {c}
+                            {count > 0 && (
+                              <span className="ml-1 bg-blue-100 text-blue-600 rounded-full px-1.5 text-xs">
+                                {count}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {(selectedCategory ? [selectedCategory] : allCategories).map((cat) => {
+                      const catItems = itemsByCategory[cat] ?? [];
+                      if (!catItems.length) return null;
+                      return (
+                        <div key={cat} className="mb-6">
+                          <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-2 ${CATEGORY_COLORS[cat] ?? "bg-gray-100 text-gray-600"}`}>
+                            📦 {cat} <span className="text-xs opacity-70">({catItems.length})</span>
+                          </div>
+                          <div className="space-y-2">
+                            {catItems.map((item) => (
+                              <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} onEdit={handleEditOpen} dark={dk} sCard={sCard} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {pendingItems.length === 0 && <EmptyState message="未購入の商品はありません 🎉" dark={dk} />}
+                  </>
+                )}
               </div>
             )}
 
@@ -560,7 +833,7 @@ export default function Home() {
                   ? <EmptyState message="購入済みの商品はありません" dark={dk} />
                   : <div className="space-y-2">
                       {purchasedItems.map((item) => (
-                        <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} dark={dk} sCard={sCard} dimmed />
+                        <ItemCard key={item.id} item={item} onToggle={handleToggle} onDelete={handleDelete} onEdit={handleEditOpen} dark={dk} sCard={sCard} dimmed />
                       ))}
                     </div>
                 }
@@ -578,6 +851,7 @@ function ItemCard({
   item,
   onToggle,
   onDelete,
+  onEdit,
   dark = false,
   sCard = {},
   dimmed = false,
@@ -585,6 +859,7 @@ function ItemCard({
   item: ShoppingItem;
   onToggle: (item: ShoppingItem) => void;
   onDelete: (id: string) => void;
+  onEdit:   (item: ShoppingItem) => void;
   dark?: boolean;
   sCard?: React.CSSProperties;
   dimmed?: boolean;
@@ -635,13 +910,25 @@ function ItemCard({
         </div>
       </div>
 
-      <button
-        onClick={() => onDelete(item.id)}
-        className="flex-shrink-0 hover:text-red-400 active:text-red-500 transition-colors p-1 text-lg"
-        style={{ color: dark ? "#4a4a6a" : "#d1d5db" }}
-      >
-        🗑
-      </button>
+      {/* 修正②: 編集・削除ボタン */}
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <button
+          onClick={() => onEdit(item)}
+          className="hover:text-blue-400 active:text-blue-500 transition-colors p-1 text-lg"
+          style={{ color: dark ? "#4a4a6a" : "#d1d5db" }}
+          title="編集"
+        >
+          ✏️
+        </button>
+        <button
+          onClick={() => onDelete(item.id)}
+          className="hover:text-red-400 active:text-red-500 transition-colors p-1 text-lg"
+          style={{ color: dark ? "#4a4a6a" : "#d1d5db" }}
+          title="削除"
+        >
+          🗑
+        </button>
+      </div>
     </div>
   );
 }

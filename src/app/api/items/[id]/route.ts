@@ -8,9 +8,17 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await req.json();
+    // is_purchased のみ、または編集フォームからの全フィールド更新に対応
+    const updateFields: Record<string, unknown> = {};
+    if (body.is_purchased !== undefined) updateFields.is_purchased = body.is_purchased;
+    if (body.name        !== undefined) updateFields.name         = body.name;
+    if (body.category    !== undefined) updateFields.category     = body.category || null;
+    if (body.store       !== undefined) updateFields.store        = body.store    || null;
+    if (body.quantity    !== undefined) updateFields.quantity     = body.quantity || null;
+    if (body.memo        !== undefined) updateFields.memo         = body.memo     || null;
     const { data, error } = await supabase
       .from("shopping_items")
-      .update({ is_purchased: body.is_purchased })
+      .update(updateFields)
       .eq("id", id)
       .select()
       .single();
