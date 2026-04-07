@@ -33,9 +33,12 @@ export default function Home() {
   const [isDark, setIsDark]             = useState(false);
   const [customStores, setCustomStores] = useState<string[]>([]);
   const [storeOrder, setStoreOrder]     = useState<string[]>([]);
-  const [isSortMode, setIsSortMode]     = useState(false);
-  const [showAddStore, setShowAddStore] = useState(false);
-  const [newStoreName, setNewStoreName] = useState("");
+  const [isSortMode, setIsSortMode]         = useState(false);
+  const [isEditStoreMode, setIsEditStoreMode] = useState(false);
+  const [editingStore, setEditingStore]     = useState<string | null>(null);
+  const [editStoreName, setEditStoreName]   = useState("");
+  const [showAddStore, setShowAddStore]     = useState(false);
+  const [newStoreName, setNewStoreName]     = useState("");
 
   // ── 修正②: 編集モーダル ──
   const [editItem, setEditItem]           = useState<ShoppingItem | null>(null);
@@ -109,6 +112,53 @@ export default function Home() {
     [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
     setStoreOrder(next);
     localStorage.setItem("storeOrder", JSON.stringify(next));
+  };
+
+  // ── 店舗リネーム ──
+  const handleRenameStore = async (oldName: string) => {
+    const trimmed = editStoreName.trim();
+    if (!trimmed || trimmed === oldName) { setEditingStore(null); return; }
+    if (allStores.includes(trimmed))    { setEditingStore(null); return; }
+
+    const nextCustom = customStores.map((s) => (s === oldName ? trimmed : s));
+    const nextOrder  = storeOrder.map((s)  => (s === oldName ? trimmed : s));
+    setCustomStores(nextCustom);
+    setStoreOrder(nextOrder);
+    localStorage.setItem("customStores", JSON.stringify(nextCustom));
+    localStorage.setItem("storeOrder",   JSON.stringify(nextOrder));
+    if (selectedStore === oldName) setSelectedStore(trimmed);
+    setEditingStore(null);
+
+    if (userId) {
+      await fetch("/api/items/bulk-store", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ oldStore: oldName, newStore: trimmed }),
+      });
+      fetchItems(tab === "history" ? "purchased" : "pending");
+    }
+  };
+
+  // ── 店舗削除 ──
+  const handleDeleteStore = async (name: string) => {
+    if (!confirm(`「${name}」を削除しますか？\nこの店舗に紐付いているアイテムは「店舗未設定」になります。`)) return;
+
+    const nextCustom = customStores.filter((s) => s !== name);
+    const nextOrder  = storeOrder.filter((s)  => s !== name);
+    setCustomStores(nextCustom);
+    setStoreOrder(nextOrder);
+    localStorage.setItem("customStores", JSON.stringify(nextCustom));
+    localStorage.setItem("storeOrder",   JSON.stringify(nextOrder));
+    if (selectedStore === name) setSelectedStore(null);
+
+    if (userId) {
+      await fetch("/api/items/bulk-store", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ oldStore: name, newStore: null }),
+      });
+      fetchItems(tab === "history" ? "purchased" : "pending");
+    }
   };
 
   // ── アイテム取得 ──
@@ -626,39 +676,92 @@ export default function Home() {
                   <>
                     <div className="flex items-center gap-2 mb-3">
                       <div className="flex-1 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
-                        {/* すべてチップ */}
-                        <button
-                          onClick={() => !isSortMode && setSelectedStore(null)}
-                          className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
-                            selectedStore === null ? "bg-emerald-500 text-white border-emerald-500" : ""
-                          }`}
-                          style={selectedStore !== null ? (dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}) : {}}
-                        >
-                          すべて
-                        </button>
+                        {/* すべてチップ（編集・並替モード以外で表示） */}
+                        {!isSortMode && !isEditStoreMode && (
+                          <button
+                            onClick={() => setSelectedStore(null)}
+                            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                              selectedStore === null ? "bg-emerald-500 text-white border-emerald-500" : ""
+                            }`}
+                            style={selectedStore !== null ? (dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : {}) : {}}
+                          >
+                            すべて
+                          </button>
+                        )}
 
-                        {/* 修正①: 店舗チップ + ↑↓ボタン */}
+                        {/* 店舗チップ */}
                         {allStores.map((s, idx) => (
                           <div key={s} className="flex-shrink-0 flex items-center gap-0.5">
-                            <button
-                              onClick={() => !isSortMode && setSelectedStore(selectedStore === s ? null : s)}
-                              className={chipStyle(s)}
-                              style={
-                                selectedStore !== s
-                                  ? dk
-                                    ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT }
-                                    : {}
-                                  : {}
-                              }
-                            >
-                              {s}
-                              {!isSortMode && (itemsByStore[s]?.length ?? 0) > 0 && (
-                                <span className="ml-1 bg-emerald-100 text-emerald-600 rounded-full px-1.5 text-xs">
-                                  {itemsByStore[s].length}
-                                </span>
-                              )}
-                            </button>
 
+                            {/* 編集モード: 編集中ならインライン入力、それ以外はチップ+編集/削除ボタン */}
+                            {isEditStoreMode ? (
+                              editingStore === s ? (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="text"
+                                    value={editStoreName}
+                                    onChange={(e) => setEditStoreName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") handleRenameStore(s);
+                                      if (e.key === "Escape") setEditingStore(null);
+                                    }}
+                                    className="border rounded-full px-3 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-900"
+                                    style={sInput}
+                                    autoFocus
+                                  />
+                                  <button
+                                    onClick={() => handleRenameStore(s)}
+                                    className="bg-blue-500 text-white rounded-full px-2 py-1 text-xs font-medium"
+                                  >✓</button>
+                                  <button
+                                    onClick={() => setEditingStore(null)}
+                                    className="rounded-full px-2 py-1 text-xs border"
+                                    style={dk ? { borderColor: DK_BORDER, color: DK_TEXT } : { color: "#6b7280" }}
+                                  >×</button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-0.5">
+                                  <span
+                                    className="flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border"
+                                    style={dk ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT } : { borderColor: "#d1d5db", color: "#374151" }}
+                                  >
+                                    {s}
+                                  </span>
+                                  <button
+                                    onClick={() => { setEditingStore(s); setEditStoreName(s); }}
+                                    className="text-blue-400 hover:text-blue-600 px-1 py-0.5 text-sm transition-colors"
+                                    title="店舗名を編集"
+                                  >✏️</button>
+                                  <button
+                                    onClick={() => handleDeleteStore(s)}
+                                    className="text-red-300 hover:text-red-500 px-1 py-0.5 text-sm transition-colors"
+                                    title="店舗を削除"
+                                  >×</button>
+                                </div>
+                              )
+                            ) : (
+                              /* 通常モード / 並替モード */
+                              <button
+                                onClick={() => !isSortMode && setSelectedStore(selectedStore === s ? null : s)}
+                                className={chipStyle(s)}
+                                style={
+                                  selectedStore !== s
+                                    ? dk
+                                      ? { background: DK_INPUT, borderColor: DK_BORDER, color: DK_TEXT }
+                                      : {}
+                                    : {}
+                                }
+                              >
+                                {s}
+                                {!isSortMode && (itemsByStore[s]?.length ?? 0) > 0 && (
+                                  <span className="ml-1 bg-emerald-100 text-emerald-600 rounded-full px-1.5 text-xs">
+                                    {itemsByStore[s].length}
+                                  </span>
+                                )}
+                              </button>
+                            )}
+
+                            {/* 並替モードの↑↓ボタン */}
                             {isSortMode && (
                               <div className="flex flex-col gap-0.5 ml-0.5">
                                 <button
@@ -669,9 +772,7 @@ export default function Home() {
                                       ? "bg-gray-100 text-gray-300 cursor-not-allowed"
                                       : "bg-gray-200 text-gray-600 hover:bg-gray-300"
                                   }`}
-                                >
-                                  ↑
-                                </button>
+                                >↑</button>
                                 <button
                                   onClick={() => moveStore(s, "down")}
                                   disabled={idx === allStores.length - 1}
@@ -680,16 +781,14 @@ export default function Home() {
                                       ? "bg-gray-100 text-gray-300 cursor-not-allowed"
                                       : "bg-gray-200 text-gray-600 hover:bg-gray-300"
                                   }`}
-                                >
-                                  ↓
-                                </button>
+                                >↓</button>
                               </div>
                             )}
                           </div>
                         ))}
 
-                        {/* 店舗追加 */}
-                        {!isSortMode && (
+                        {/* 店舗追加（通常モード時のみ） */}
+                        {!isSortMode && !isEditStoreMode && (
                           showAddStore ? (
                             <div className="flex gap-1 flex-shrink-0 items-center">
                               <input
@@ -718,20 +817,34 @@ export default function Home() {
                         )}
                       </div>
 
-                      {/* 並替ボタン */}
-                      <button
-                        onClick={() => setIsSortMode(!isSortMode)}
-                        className={`flex-shrink-0 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-all ${
-                          isSortMode ? "bg-emerald-500 text-white border-emerald-500" : ""
-                        }`}
-                        style={!isSortMode ? (dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { borderColor: "#d1d5db", color: "#6b7280" }) : {}}
-                      >
-                        {isSortMode ? "✓ 完了" : "⠿ 並替"}
-                      </button>
+                      {/* 並替・編集ボタン（縦並び） */}
+                      <div className="flex flex-col gap-1 flex-shrink-0">
+                        <button
+                          onClick={() => { setIsSortMode(!isSortMode); setIsEditStoreMode(false); setEditingStore(null); }}
+                          className={`text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-all ${
+                            isSortMode ? "bg-emerald-500 text-white border-emerald-500" : ""
+                          }`}
+                          style={!isSortMode ? (dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { borderColor: "#d1d5db", color: "#6b7280" }) : {}}
+                        >
+                          {isSortMode ? "✓ 完了" : "⠿ 並替"}
+                        </button>
+                        <button
+                          onClick={() => { setIsEditStoreMode(!isEditStoreMode); setIsSortMode(false); setEditingStore(null); }}
+                          className={`text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-all ${
+                            isEditStoreMode ? "bg-blue-500 text-white border-blue-500" : ""
+                          }`}
+                          style={!isEditStoreMode ? (dk ? { borderColor: DK_BORDER, color: DK_TEXT, background: DK_INPUT } : { borderColor: "#d1d5db", color: "#6b7280" }) : {}}
+                        >
+                          {isEditStoreMode ? "✓ 完了" : "✏️ 編集"}
+                        </button>
+                      </div>
                     </div>
 
                     {isSortMode && (
                       <p className="text-xs text-emerald-500 mb-3">↑↓ボタンで店舗の順番を変えてください</p>
+                    )}
+                    {isEditStoreMode && (
+                      <p className="text-xs text-blue-500 mb-3">✏️ で名前を変更、× で店舗を削除できます</p>
                     )}
 
                     {/* 店舗が空のとき */}
