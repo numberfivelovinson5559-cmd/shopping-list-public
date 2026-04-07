@@ -29,6 +29,7 @@ export default function Home() {
   const [form, setForm] = useState({ name: "", category: "", store: "", quantity: "", memo: "" });
 
   const [mounted, setMounted]           = useState(false);
+  const [userId, setUserId]             = useState<string | null>(null);
   const [isDark, setIsDark]             = useState(false);
   const [customStores, setCustomStores] = useState<string[]>([]);
   const [storeOrder, setStoreOrder]     = useState<string[]>([]);
@@ -48,6 +49,14 @@ export default function Home() {
   // ── localStorage 初期化 ──
   useEffect(() => {
     setMounted(true);
+    // ユーザーID: 初回アクセス時にUUIDを生成して永続化
+    let uid = localStorage.getItem("userId");
+    if (!uid) {
+      uid = crypto.randomUUID();
+      localStorage.setItem("userId", uid);
+    }
+    setUserId(uid);
+
     const dark   = localStorage.getItem("darkMode") === "true";
     const saved  = localStorage.getItem("customStores");
     const order  = localStorage.getItem("storeOrder");
@@ -104,10 +113,13 @@ export default function Home() {
 
   // ── アイテム取得 ──
   const fetchItems = useCallback(async (filter: "all" | "pending" | "purchased" = "all") => {
+    if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      const res  = await fetch(`/api/items?filter=${filter}`);
+      const res  = await fetch(`/api/items?filter=${filter}`, {
+        headers: { "x-user-id": userId },
+      });
       if (!res.ok) throw new Error("取得失敗");
       const data = await res.json();
       setItems(data.items);
@@ -116,19 +128,20 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    fetchItems(tab === "history" ? "purchased" : "pending");
-  }, [tab, fetchItems]);
+    if (userId) fetchItems(tab === "history" ? "purchased" : "pending");
+  }, [tab, fetchItems, userId]);
 
   const handleToggle = async (item: ShoppingItem) => {
+    if (!userId) return;
     const newVal = !item.is_purchased;
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_purchased: newVal } : i)));
     try {
       await fetch(`/api/items/${item.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
         body: JSON.stringify({ is_purchased: newVal }),
       });
       setTimeout(() => fetchItems(tab === "history" ? "purchased" : "pending"), 600);
@@ -139,10 +152,13 @@ export default function Home() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("削除しますか？")) return;
+    if (!userId || !confirm("削除しますか？")) return;
     setItems((prev) => prev.filter((i) => i.id !== id));
     try {
-      await fetch(`/api/items/${id}`, { method: "DELETE" });
+      await fetch(`/api/items/${id}`, {
+        method: "DELETE",
+        headers: { "x-user-id": userId },
+      });
     } catch {
       setError("削除に失敗しました");
       fetchItems();
@@ -151,13 +167,13 @@ export default function Home() {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name.trim()) return;
+    if (!form.name.trim() || !userId) return;
     setSubmitting(true);
     setError(null);
     try {
       const res = await fetch("/api/items", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
         body: JSON.stringify(form),
       });
       if (!res.ok) throw new Error("追加失敗");
@@ -186,13 +202,13 @@ export default function Home() {
 
   const handleEditSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editItem || !editForm.name.trim()) return;
+    if (!editItem || !editForm.name.trim() || !userId) return;
     setEditSubmitting(true);
     setError(null);
     try {
       const res = await fetch(`/api/items/${editItem.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
         body: JSON.stringify(editForm),
       });
       if (!res.ok) throw new Error("更新失敗");

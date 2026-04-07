@@ -8,6 +8,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 // ─── Types ────────────────────────────────────────────────────────
 export type ShoppingItem = {
   id: string;
+  user_id: string | null;
   name: string;
   store: string | null;
   category: string | null;

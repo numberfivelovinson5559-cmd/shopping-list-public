@@ -4,9 +4,16 @@ import { supabase } from "@/lib/supabase";
 export async function GET(req: NextRequest) {
   try {
     const filter = req.nextUrl.searchParams.get("filter") ?? "all";
+    const userId = req.headers.get("x-user-id");
+
+    if (!userId) {
+      return NextResponse.json({ items: [] });
+    }
+
     let query = supabase
       .from("shopping_items")
       .select("*")
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
     if (filter === "pending")   query = query.eq("is_purchased", false);
@@ -23,6 +30,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = req.headers.get("x-user-id");
+    if (!userId) {
+      return NextResponse.json({ error: "ユーザーIDが必要です" }, { status: 400 });
+    }
+
     const body = await req.json();
     if (!body.name?.trim()) {
       return NextResponse.json({ error: "商品名は必須です" }, { status: 400 });
@@ -30,6 +42,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabase
       .from("shopping_items")
       .insert({
+        user_id: userId,
         name: body.name.trim(),
         store: body.store || null,
         category: body.category || null,
